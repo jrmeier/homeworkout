@@ -52,9 +52,8 @@ const getExercise = (id: number): Exercise => {
 // WORKOUTS - Add more workouts here!
 // =============================================================================
 
-// Each workout needs:
-// 1. An entry in BASE_WORKOUTS with basic info
-// 2. An entry in WORKOUT_BLOCKS with the workout blocks and exercises
+// Each workout is defined with its full data including blocks and exercises
+// Just add a new entry to WORKOUT_DATA following the existing pattern
 
 interface WorkoutBlockData {
   name: string;
@@ -1058,89 +1057,6 @@ const WORKOUT_DATA: WorkoutData[] = [
       },
     ],
   },
-]
-
-const BASE_WORKOUTS: Workout[] = [
-  {
-    id: 2,
-    name: 'Kettlebell Engine Builder',
-    description: 'High-density rounds + EMOM strength + short finisher. Small space, big suffering.',
-    estimatedMinutes: 38,
-    difficulty: 'advanced',
-    isPreset: true,
-  },
-  {
-    id: 3,
-    name: 'Swing Ladder Beatdown',
-    description: 'Progressive swing + squat ladder, then EMOM press/row. Fast heart rate, strong hinge.',
-    estimatedMinutes: 40,
-    difficulty: 'advanced',
-    isPreset: true,
-  },
-  {
-    id: 4,
-    name: 'Clean + Squat Pressure Cooker',
-    description: 'Cleans, squats, swings, and a finisher that feels illegal. Strength + conditioning.',
-    estimatedMinutes: 42,
-    difficulty: 'advanced',
-    isPreset: true,
-  },
-  {
-    id: 5,
-    name: 'Small Space Destroyer',
-    description: 'Minimal movement, maximum output. Press EMOM + legs/lungs AMRAP.',
-    estimatedMinutes: 40,
-    difficulty: 'advanced',
-    isPreset: true,
-  },
-  {
-    id: 6,
-    name: 'Goblet Squat Gauntlet',
-    description: 'Leg volume + swings, then EMOM hinge/pull. A squat-heavy sufferfest.',
-    estimatedMinutes: 41,
-    difficulty: 'advanced',
-    isPreset: true,
-  },
-  {
-    id: 7,
-    name: 'Press + Plank Punisher',
-    description: 'Pressing strength, swing EMOM, and a push-up AMRAP. Shoulders + core get cooked.',
-    estimatedMinutes: 36,
-    difficulty: 'advanced',
-    isPreset: true,
-  },
-  {
-    id: 8,
-    name: 'Legs on Fire (Lunge + Swing)',
-    description: 'Front rack lunges + swing volume. Your legs will write an angry Yelp review.',
-    estimatedMinutes: 42,
-    difficulty: 'advanced',
-    isPreset: true,
-  },
-  {
-    id: 9,
-    name: 'Upper Back + Grip Smoker',
-    description: 'Rows + deadlifts + swings, then clean & press EMOM. Posterior chain + grip taxed hard.',
-    estimatedMinutes: 43,
-    difficulty: 'advanced',
-    isPreset: true,
-  },
-  {
-    id: 10,
-    name: '30-Minute Brutal Express',
-    description: 'Shorter session, still nasty. EMOM swings/goblet then a 12-min AMRAP.',
-    estimatedMinutes: 30,
-    difficulty: 'advanced',
-    isPreset: true,
-  },
-  {
-    id: 11,
-    name: 'Kitchen Floor War (Classic)',
-    description: 'Classic full-body rounds + clean/press EMOM + 10-min finisher. No fluff.',
-    estimatedMinutes: 44,
-    difficulty: 'advanced',
-    isPreset: true,
-  },
 ];
 
 // Build fully hydrated workouts with blocks and exercises
@@ -1167,7 +1083,7 @@ function buildWorkouts(): WorkoutWithBlocks[] {
 
       return {
         id: blockId,
-        id: workoutData.id,
+        workoutId: workoutData.id,
         name: blockData.name,
         type: blockData.type,
         rounds: blockData.rounds,
