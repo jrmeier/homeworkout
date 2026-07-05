@@ -87,9 +87,9 @@ export function WorkoutCard({ workout }: WorkoutCardProps) {
         
         <div className="flex gap-2 pt-2">
           <Button asChild className="flex-1">
-            <Link href={`/active/${workout.id}`}>
+            <Link href="/program">
               <Play className="h-4 w-4 mr-2" />
-              Start Workout
+              Use Program
             </Link>
           </Button>
           <Button variant="outline" size="icon" asChild>

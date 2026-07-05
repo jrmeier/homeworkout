@@ -3,10 +3,11 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
-import { Dumbbell, ListChecks, Home, History, Plus } from 'lucide-react';
+import { Dumbbell, ListChecks, Home, History, CalendarDays } from 'lucide-react';
 
 const navItems = [
   { href: '/', label: 'Home', icon: Home },
+  { href: '/program', label: 'Program', icon: CalendarDays },
   { href: '/workouts', label: 'Workouts', icon: ListChecks },
   { href: '/exercises', label: 'Exercises', icon: Dumbbell },
   { href: '/history', label: 'History', icon: History },

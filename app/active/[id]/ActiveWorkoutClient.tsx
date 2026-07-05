@@ -1,588 +1,379 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
+import { AlertTriangle, ArrowLeft, Check, ChevronRight, Clock, Dumbbell, HeartPulse, Pause, Play, Plus, ShieldAlert, TimerReset, X } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Progress } from '@/components/ui/progress';
-import { ProgressRing } from '@/components/workout/ProgressRing';
+import { Textarea } from '@/components/ui/textarea';
 import { useTimer } from '@/lib/hooks/useTimer';
 import { useWakeLock } from '@/lib/hooks/useWakeLock';
-import { getWorkoutById, createSession, updateSession } from '@/lib/store';
-import type { WorkoutWithBlocks } from '@/lib/types';
-import { 
-  Play, Pause, SkipForward, X, Check, 
-  Flame, Volume2, VolumeX 
-} from 'lucide-react';
-
-type WorkoutPhase = 'ready' | 'active' | 'rest' | 'complete';
-
-interface WorkoutState {
-  phase: WorkoutPhase;
-  currentBlockIndex: number;
-  currentExerciseIndex: number;
-  currentRound: number;
-  amrapRounds: number;
-  sessionId: number | null;
-}
-
-const blockTypeColors: Record<string, string> = {
-  warmup: 'text-yellow-500',
-  rounds: 'text-red-500',
-  emom: 'text-blue-500',
-  amrap: 'text-purple-500',
-  cooldown: 'text-green-500',
-};
+import {
+  addCardioLog,
+  addStrengthSet,
+  canLogPosture,
+  completePostureRoutine,
+  completeProgramSession,
+  getScheduledWorkout,
+  saveSafetyAnswers,
+  startProgramSession,
+} from '@/lib/store';
+import type { ExercisePrescription, ProgramBlock, ProgramSession, SafetyAnswers } from '@/lib/types';
 
 interface ActiveWorkoutClientProps {
   workoutId: string;
 }
 
+const redFlagFields: Array<{ key: keyof Omit<SafetyAnswers, 'checkedAt' | 'acknowledged'>; label: string }> = [
+  { key: 'numbnessOrTingling', label: 'Numbness or tingling' },
+  { key: 'radiatingPain', label: 'Pain radiating into an arm' },
+  { key: 'dizziness', label: 'Dizziness or balance symptoms' },
+  { key: 'severeHeadache', label: 'Severe headache' },
+  { key: 'recentTrauma', label: 'Recent trauma or fall' },
+  { key: 'weakness', label: 'New weakness' },
+  { key: 'worseningPain', label: 'Worsening or sharp neck pain' },
+];
+
+function blockIcon(type: ProgramBlock['type']) {
+  if (type === 'strength') return <Dumbbell className="h-4 w-4" />;
+  if (type === 'cardio') return <Clock className="h-4 w-4" />;
+  if (type === 'posture') return <HeartPulse className="h-4 w-4" />;
+  return <TimerReset className="h-4 w-4" />;
+}
+
 export default function ActiveWorkoutClient({ workoutId }: ActiveWorkoutClientProps) {
   const router = useRouter();
-  const [workout, setWorkout] = useState<WorkoutWithBlocks | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [soundEnabled, setSoundEnabled] = useState(true);
-  
-  const [state, setState] = useState<WorkoutState>({
-    phase: 'ready',
-    currentBlockIndex: 0,
-    currentExerciseIndex: 0,
-    currentRound: 1,
-    amrapRounds: 0,
-    sessionId: null,
-  });
-
+  const workout = useMemo(() => getScheduledWorkout(workoutId), [workoutId]);
+  const [session, setSession] = useState<ProgramSession | null>(null);
+  const [blockIndex, setBlockIndex] = useState(0);
+  const [exerciseInputs, setExerciseInputs] = useState<Record<string, { reps: string; weight: string; rpe: string }>>({});
+  const [notes, setNotes] = useState('');
+  const [energy, setEnergy] = useState('7');
+  const [body, setBody] = useState('');
+  const [safetyDraft, setSafetyDraft] = useState<Record<string, boolean>>({});
+  const [soundOn, setSoundOn] = useState(true);
+  const [complete, setComplete] = useState(false);
   const wakeLock = useWakeLock();
-
-  // Main workout timer
-  const timer = useTimer({
-    initialSeconds: 0,
-    countDown: false,
-    autoStart: false,
-  });
-
-  // Block/exercise timer (for countdown-based exercises)
-  const blockTimer = useTimer({
-    initialSeconds: 0,
-    countDown: true,
-    autoStart: false,
-    onComplete: () => handleTimerComplete(),
-  });
+  const totalTimer = useTimer({ initialSeconds: 0, countDown: false });
 
   useEffect(() => {
-    // Load workout from the store
-    const workoutData = getWorkoutById(parseInt(workoutId));
-    setWorkout(workoutData);
-    setLoading(false);
-  }, [workoutId]);
-
-  const playSound = useCallback((type: 'beep' | 'complete' | 'rest') => {
-    if (!soundEnabled) return;
-    
-    // Create a simple beep using Web Audio API
-    try {
-      const audioContext = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
-      const oscillator = audioContext.createOscillator();
-      const gainNode = audioContext.createGain();
-      
-      oscillator.connect(gainNode);
-      gainNode.connect(audioContext.destination);
-      
-      const frequencies: Record<string, number> = {
-        beep: 800,
-        complete: 1200,
-        rest: 400,
-      };
-      
-      oscillator.frequency.value = frequencies[type];
-      oscillator.type = 'sine';
-      gainNode.gain.value = 0.3;
-      
-      oscillator.start();
-      oscillator.stop(audioContext.currentTime + 0.15);
-    } catch (e) {
-      // Audio not available
-    }
-  }, [soundEnabled]);
-
-  const startWorkout = () => {
-    // Create session in localStorage
-    const session = createSession(parseInt(workoutId));
-    setState(prev => ({ ...prev, sessionId: session.id }));
-
-    // Request wake lock
+    if (!workout) return;
+    const created = startProgramSession(workout.id);
+    setSession(created);
     wakeLock.request();
-    
-    setState(prev => ({ ...prev, phase: 'active' }));
-    timer.start();
-    
-    // Initialize block timer if needed
-    initializeBlockTimer();
-  };
-
-  const initializeBlockTimer = useCallback(() => {
-    if (!workout) return;
-    
-    const block = workout.blocks[state.currentBlockIndex];
-    if (!block) return;
-
-    if (block.type === 'emom') {
-      // EMOM: 60 second intervals
-      blockTimer.reset(60);
-      blockTimer.start();
-    } else if (block.type === 'amrap') {
-      // AMRAP: total duration countdown
-      blockTimer.reset(block.durationSeconds || 600);
-      blockTimer.start();
-    } else if (block.type === 'warmup' || block.type === 'cooldown') {
-      // Timed exercise
-      const exercise = block.exercises[state.currentExerciseIndex];
-      if (exercise?.durationSeconds) {
-        blockTimer.reset(exercise.durationSeconds);
-        blockTimer.start();
-      }
-    }
-  }, [workout, state.currentBlockIndex, state.currentExerciseIndex, blockTimer]);
-
-  const handleTimerComplete = useCallback(() => {
-    playSound('beep');
-    
-    if (!workout) return;
-    const block = workout.blocks[state.currentBlockIndex];
-    if (!block) return;
-
-    if (block.type === 'emom') {
-      // Move to next exercise in EMOM cycle
-      const nextExercise = (state.currentExerciseIndex + 1) % block.exercises.length;
-      const nextRound = nextExercise === 0 ? state.currentRound + 1 : state.currentRound;
-      
-      // Check if EMOM is complete
-      const totalMinutes = (block.durationSeconds || 720) / 60;
-      const currentMinute = (state.currentRound - 1) * block.exercises.length + state.currentExerciseIndex + 1;
-      
-      if (currentMinute >= totalMinutes) {
-        moveToNextBlock();
-      } else {
-        setState(prev => ({
-          ...prev,
-          currentExerciseIndex: nextExercise,
-          currentRound: nextRound,
-        }));
-        blockTimer.reset(60);
-        blockTimer.start();
-      }
-    } else if (block.type === 'amrap') {
-      // AMRAP time's up
-      playSound('complete');
-      moveToNextBlock();
-    } else if (block.type === 'warmup' || block.type === 'cooldown') {
-      // Move to next exercise
-      moveToNextExercise();
-    }
-  }, [workout, state, blockTimer, playSound]);
-
-  const moveToNextExercise = useCallback(() => {
-    if (!workout) return;
-    const block = workout.blocks[state.currentBlockIndex];
-    if (!block) return;
-
-    const nextExerciseIndex = state.currentExerciseIndex + 1;
-    
-    if (nextExerciseIndex >= block.exercises.length) {
-      // End of exercises in this round
-      if (block.type === 'rounds' && state.currentRound < (block.rounds || 1)) {
-        // More rounds to go
-        if (block.restSeconds && block.restSeconds > 0) {
-          // Rest period
-          setState(prev => ({ ...prev, phase: 'rest' }));
-          blockTimer.reset(block.restSeconds);
-          blockTimer.start();
-        } else {
-          // No rest, start next round
-          setState(prev => ({
-            ...prev,
-            currentRound: prev.currentRound + 1,
-            currentExerciseIndex: 0,
-          }));
-        }
-      } else {
-        // Block complete
-        moveToNextBlock();
-      }
-    } else {
-      setState(prev => ({ ...prev, currentExerciseIndex: nextExerciseIndex }));
-      
-      // Set up timer for timed exercises
-      if (block.type === 'warmup' || block.type === 'cooldown') {
-        const exercise = block.exercises[nextExerciseIndex];
-        if (exercise?.durationSeconds) {
-          blockTimer.reset(exercise.durationSeconds);
-          blockTimer.start();
-        }
-      }
-    }
-  }, [workout, state, blockTimer]);
-
-  const moveToNextBlock = useCallback(() => {
-    if (!workout) return;
-    
-    const nextBlockIndex = state.currentBlockIndex + 1;
-    
-    if (nextBlockIndex >= workout.blocks.length) {
-      // Workout complete!
-      completeWorkout();
-    } else {
-      playSound('complete');
-      setState(prev => ({
-        ...prev,
-        currentBlockIndex: nextBlockIndex,
-        currentExerciseIndex: 0,
-        currentRound: 1,
-        phase: 'active',
-      }));
-      
-      // Initialize timer for new block
-      setTimeout(() => {
-        initializeBlockTimer();
-      }, 100);
-    }
-  }, [workout, state.currentBlockIndex, playSound, initializeBlockTimer]);
-
-  const handleRestComplete = useCallback(() => {
-    playSound('beep');
-    setState(prev => ({
-      ...prev,
-      phase: 'active',
-      currentRound: prev.currentRound + 1,
-      currentExerciseIndex: 0,
-    }));
-  }, [playSound]);
-
-  const completeWorkout = () => {
-    timer.pause();
-    blockTimer.pause();
-    wakeLock.release();
-    playSound('complete');
-    
-    setState(prev => ({ ...prev, phase: 'complete' }));
-    
-    // Update session in localStorage
-    if (state.sessionId) {
-      updateSession(state.sessionId, {
-        completedAt: new Date().toISOString(),
-        totalRounds: state.amrapRounds || undefined,
-      });
-    }
-  };
-
-  const handleExerciseComplete = () => {
-    if (!workout) return;
-    const block = workout.blocks[state.currentBlockIndex];
-    
-    if (block.type === 'amrap') {
-      // In AMRAP, completing all exercises = 1 round
-      const nextExercise = (state.currentExerciseIndex + 1) % block.exercises.length;
-      if (nextExercise === 0) {
-        setState(prev => ({
-          ...prev,
-          amrapRounds: prev.amrapRounds + 1,
-          currentExerciseIndex: 0,
-        }));
-      } else {
-        setState(prev => ({ ...prev, currentExerciseIndex: nextExercise }));
-      }
-    } else {
-      moveToNextExercise();
-    }
-  };
-
-  const exitWorkout = () => {
-    timer.pause();
-    blockTimer.pause();
-    wakeLock.release();
-    router.push('/workouts');
-  };
-
-  // Effect to handle rest period completion
-  useEffect(() => {
-    if (state.phase === 'rest' && blockTimer.seconds === 0 && !blockTimer.isRunning) {
-      handleRestComplete();
-    }
-  }, [state.phase, blockTimer.seconds, blockTimer.isRunning, handleRestComplete]);
-
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-pulse text-xl">Loading workout...</div>
-      </div>
-    );
-  }
+    totalTimer.start();
+    return () => {
+      wakeLock.release();
+      totalTimer.pause();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workout?.id]);
 
   if (!workout) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center gap-4">
-        <p className="text-muted-foreground">Workout not found</p>
-        <Button onClick={() => router.push('/workouts')}>Back to Workouts</Button>
-      </div>
+      <main className="flex min-h-screen items-center justify-center p-6">
+        <Card className="max-w-md">
+          <CardContent className="space-y-4 p-6 text-center">
+            <AlertTriangle className="mx-auto h-10 w-10 text-destructive" />
+            <p className="font-semibold">Workout not found</p>
+            <Button onClick={() => router.push('/program')}>Back to Program</Button>
+          </CardContent>
+        </Card>
+      </main>
     );
   }
 
-  const currentBlock = workout.blocks[state.currentBlockIndex];
-  const currentExercise = currentBlock?.exercises[state.currentExerciseIndex];
-  const totalExercises = workout.blocks.reduce((acc, b) => acc + b.exercises.length, 0);
-  const completedExercises = workout.blocks
-    .slice(0, state.currentBlockIndex)
-    .reduce((acc, b) => acc + b.exercises.length, 0) + state.currentExerciseIndex;
-  const overallProgress = totalExercises > 0 ? completedExercises / totalExercises : 0;
+  const currentBlock = workout.blocks[blockIndex];
+  const progress = Math.round((blockIndex / workout.blocks.length) * 100);
 
-  // Ready state
-  if (state.phase === 'ready') {
+  const playTone = () => {
+    if (!soundOn) return;
+    try {
+      const audio = new AudioContext();
+      const osc = audio.createOscillator();
+      const gain = audio.createGain();
+      osc.connect(gain);
+      gain.connect(audio.destination);
+      osc.frequency.value = 740;
+      gain.gain.value = 0.15;
+      osc.start();
+      osc.stop(audio.currentTime + 0.12);
+    } catch {
+      // Audio can be unavailable in some PWA contexts.
+    }
+  };
+
+  const nextBlock = () => {
+    playTone();
+    if (blockIndex >= workout.blocks.length - 1) {
+      finishSession();
+      return;
+    }
+    setBlockIndex((value) => value + 1);
+  };
+
+  const logStrengthSet = (exercise: ExercisePrescription) => {
+    if (!session) return;
+    const key = exercise.id;
+    const draft = exerciseInputs[key] || { reps: '', weight: '', rpe: '' };
+    const setCount = session.strengthSets.filter((set) => set.exerciseId === exercise.id).length + 1;
+    const updated = addStrengthSet(session.id, {
+      exerciseId: exercise.id,
+      exerciseName: exercise.name,
+      setNumber: setCount,
+      reps: draft.reps ? Number(draft.reps) : null,
+      weight: draft.weight ? Number(draft.weight) : null,
+      rpe: draft.rpe ? Number(draft.rpe) : null,
+    });
+    if (updated) setSession({ ...updated });
+  };
+
+  const logCardio = (block: ProgramBlock) => {
+    if (!session || !block.cardio) return;
+    const updated = addCardioLog(session.id, {
+      blockId: block.id,
+      equipment: block.cardio.equipment,
+      minutes: block.cardio.durationMinutes,
+      intensity: block.cardio.intensity,
+    });
+    if (updated) setSession({ ...updated });
+  };
+
+  const submitSafety = () => {
+    if (!session) return;
+    const updated = saveSafetyAnswers(session.id, {
+      numbnessOrTingling: Boolean(safetyDraft.numbnessOrTingling),
+      radiatingPain: Boolean(safetyDraft.radiatingPain),
+      dizziness: Boolean(safetyDraft.dizziness),
+      severeHeadache: Boolean(safetyDraft.severeHeadache),
+      recentTrauma: Boolean(safetyDraft.recentTrauma),
+      weakness: Boolean(safetyDraft.weakness),
+      worseningPain: Boolean(safetyDraft.worseningPain),
+      acknowledged: true,
+    });
+    if (updated) setSession({ ...updated });
+  };
+
+  const logPosture = (block: ProgramBlock) => {
+    if (!session || !block.posture) return;
+    const updated = completePostureRoutine(session.id, block.posture.id, block.posture.durationMinutes);
+    if (updated) setSession({ ...updated });
+  };
+
+  const finishSession = () => {
+    if (!session) return;
+    const updated = completeProgramSession(session.id, {
+      notes,
+      energy: energy ? Number(energy) : null,
+      body,
+    });
+    if (updated) setSession({ ...updated });
+    totalTimer.pause();
+    wakeLock.release();
+    setComplete(true);
+  };
+
+  if (complete) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-gradient-to-b from-background to-muted/20">
-        <div className="text-center space-y-6 max-w-md">
-          <Flame className="h-16 w-16 text-primary mx-auto" />
-          <h1 className="text-3xl font-bold">{workout.name}</h1>
-          <p className="text-muted-foreground">{workout.description}</p>
-          
-          <div className="flex items-center justify-center gap-4 text-sm">
-            <Badge variant="outline">{workout.blocks.length} blocks</Badge>
-            <Badge variant="outline">{totalExercises} exercises</Badge>
-            {workout.estimatedMinutes && (
-              <Badge variant="outline">~{workout.estimatedMinutes} min</Badge>
-            )}
-          </div>
-          
-          <Button size="lg" className="w-full text-lg h-14" onClick={startWorkout}>
-            <Play className="h-6 w-6 mr-2" />
-            Start Workout
-          </Button>
-          
-          <Button variant="ghost" onClick={() => router.push('/workouts')}>
-            Cancel
-          </Button>
-        </div>
-      </div>
+      <main className="flex min-h-screen items-center justify-center p-6">
+        <Card className="w-full max-w-md">
+          <CardContent className="space-y-5 p-6 text-center">
+            <Check className="mx-auto h-12 w-12 text-emerald-400" />
+            <div>
+              <h1 className="text-2xl font-bold">Session Complete</h1>
+              <p className="text-muted-foreground">{workout.name}</p>
+            </div>
+            <div className="grid grid-cols-3 gap-2 text-sm">
+              <div className="rounded-md border border-border p-2">
+                <p className="font-semibold">{totalTimer.formatTime()}</p>
+                <p className="text-xs text-muted-foreground">Time</p>
+              </div>
+              <div className="rounded-md border border-border p-2">
+                <p className="font-semibold">{session?.strengthSets.length || 0}</p>
+                <p className="text-xs text-muted-foreground">Sets</p>
+              </div>
+              <div className="rounded-md border border-border p-2">
+                <p className="font-semibold">{session?.postureLogs.length || 0}</p>
+                <p className="text-xs text-muted-foreground">Posture</p>
+              </div>
+            </div>
+            <Button className="w-full" onClick={() => router.push('/history')}>View History</Button>
+            <Button variant="outline" className="w-full" onClick={() => router.push('/')}>Back Today</Button>
+          </CardContent>
+        </Card>
+      </main>
     );
   }
 
-  // Complete state
-  if (state.phase === 'complete') {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-gradient-to-b from-background to-primary/10">
-        <div className="text-center space-y-6 max-w-md">
-          <div className="text-6xl">🎉</div>
-          <h1 className="text-3xl font-bold">Workout Complete!</h1>
-          <p className="text-xl text-muted-foreground">{workout.name}</p>
-          
-          <div className="grid grid-cols-2 gap-4">
-            <Card>
-              <CardContent className="p-4 text-center">
-                <p className="text-3xl font-bold">{timer.formatTime()}</p>
-                <p className="text-sm text-muted-foreground">Total Time</p>
-              </CardContent>
-            </Card>
-            {state.amrapRounds > 0 && (
-              <Card>
-                <CardContent className="p-4 text-center">
-                  <p className="text-3xl font-bold">{state.amrapRounds}</p>
-                  <p className="text-sm text-muted-foreground">AMRAP Rounds</p>
-                </CardContent>
-              </Card>
-            )}
-          </div>
-          
-          <Button size="lg" className="w-full" onClick={() => router.push('/history')}>
-            View History
-          </Button>
-          <Button variant="outline" className="w-full" onClick={() => router.push('/workouts')}>
-            Back to Workouts
-          </Button>
-        </div>
-      </div>
-    );
-  }
-
-  // Active/Rest state
   return (
-    <div className="min-h-screen flex flex-col bg-background">
-      {/* Header */}
-      <div className="flex items-center justify-between p-4 border-b border-border">
-        <Button variant="ghost" size="icon" onClick={exitWorkout}>
-          <X className="h-5 w-5" />
-        </Button>
-        <div className="text-center">
-          <p className="text-sm text-muted-foreground">Total Time</p>
-          <p className="text-lg font-mono font-bold">{timer.formatTime()}</p>
-        </div>
-        <Button 
-          variant="ghost" 
-          size="icon" 
-          onClick={() => setSoundEnabled(!soundEnabled)}
-        >
-          {soundEnabled ? <Volume2 className="h-5 w-5" /> : <VolumeX className="h-5 w-5" />}
-        </Button>
-      </div>
-
-      {/* Progress */}
-      <div className="px-4 py-2">
-        <Progress value={overallProgress * 100} className="h-2" />
-        <div className="flex justify-between text-xs text-muted-foreground mt-1">
-          <span>Block {state.currentBlockIndex + 1} of {workout.blocks.length}</span>
-          <span>{Math.round(overallProgress * 100)}%</span>
-        </div>
-      </div>
-
-      {/* Rest Overlay */}
-      {state.phase === 'rest' && (
-        <div className="flex-1 flex flex-col items-center justify-center p-6 bg-blue-500/10">
-          <h2 className="text-2xl font-bold mb-4">Rest</h2>
-          <ProgressRing 
-            progress={1 - (blockTimer.seconds / (currentBlock?.restSeconds || 30))}
-            size={200}
-          >
+    <main className="min-h-screen pb-6">
+      <div className="sticky top-0 z-40 border-b border-border bg-background/95 backdrop-blur">
+        <div className="mx-auto max-w-lg px-4 py-3">
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <Button variant="ghost" size="icon" onClick={() => router.push('/program')}>
+              <ArrowLeft className="h-5 w-5" />
+            </Button>
             <div className="text-center">
-              <p className="text-5xl font-mono font-bold">{blockTimer.formatTime()}</p>
-              <p className="text-sm text-muted-foreground">until round {state.currentRound + 1}</p>
+              <p className="text-sm text-muted-foreground">{totalTimer.formatTime()}</p>
+              <h1 className="text-base font-semibold">{workout.name}</h1>
             </div>
-          </ProgressRing>
-          <Button 
-            variant="outline" 
-            className="mt-6"
-            onClick={handleRestComplete}
-          >
-            Skip Rest
+            <Button variant="ghost" size="icon" onClick={() => setSoundOn((value) => !value)}>
+              {soundOn ? <Pause className="h-5 w-5" /> : <Play className="h-5 w-5" />}
+            </Button>
+          </div>
+          <Progress value={progress} />
+          <div className="mt-1 flex justify-between text-xs text-muted-foreground">
+            <span>Block {blockIndex + 1} of {workout.blocks.length}</span>
+            <span>{currentBlock.durationMinutes} min</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="mx-auto max-w-lg space-y-4 px-4 py-5">
+        <Card>
+          <CardHeader className="pb-2">
+            <div className="flex items-center justify-between gap-3">
+              <CardTitle className="flex items-center gap-2 text-xl">
+                {blockIcon(currentBlock.type)}
+                {currentBlock.name}
+              </CardTitle>
+              <Badge variant="outline">{currentBlock.type}</Badge>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {currentBlock.notes && <p className="text-sm text-muted-foreground">{currentBlock.notes}</p>}
+
+            {currentBlock.type === 'strength' && currentBlock.exercises?.map((exercise) => {
+              const logged = session?.strengthSets.filter((set) => set.exerciseId === exercise.id).length || 0;
+              const draft = exerciseInputs[exercise.id] || { reps: '', weight: '', rpe: '' };
+              return (
+                <div key={exercise.id} className="space-y-3 rounded-md border border-border p-3">
+                  <div>
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <p className="font-semibold">{exercise.name}</p>
+                        <p className="text-sm text-muted-foreground">{exercise.target} · {exercise.equipment}</p>
+                      </div>
+                      <Badge variant="secondary">{logged}/{exercise.sets || 1}</Badge>
+                    </div>
+                    <p className="mt-2 text-sm text-muted-foreground">{exercise.notes}</p>
+                    {exercise.alternatives && <p className="mt-1 text-xs text-muted-foreground">Alt: {exercise.alternatives.join(', ')}</p>}
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <Input inputMode="numeric" placeholder="Reps" value={draft.reps} onChange={(event) => setExerciseInputs((prev) => ({ ...prev, [exercise.id]: { ...draft, reps: event.target.value } }))} />
+                    <Input inputMode="decimal" placeholder="Weight" value={draft.weight} onChange={(event) => setExerciseInputs((prev) => ({ ...prev, [exercise.id]: { ...draft, weight: event.target.value } }))} />
+                    <Input inputMode="numeric" placeholder="RPE" value={draft.rpe} onChange={(event) => setExerciseInputs((prev) => ({ ...prev, [exercise.id]: { ...draft, rpe: event.target.value } }))} />
+                  </div>
+                  <Button variant="outline" className="w-full" onClick={() => logStrengthSet(exercise)}>
+                    <Plus className="mr-2 h-4 w-4" />
+                    Log Set
+                  </Button>
+                </div>
+              );
+            })}
+
+            {currentBlock.type === 'cardio' && currentBlock.cardio && (
+              <div className="space-y-3">
+                <p className="text-lg font-semibold">{currentBlock.cardio.name}</p>
+                <p className="text-sm text-muted-foreground">{currentBlock.cardio.instructions}</p>
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  <div className="rounded-md border border-border p-3">
+                    <p className="text-muted-foreground">Equipment</p>
+                    <p className="font-medium">{currentBlock.cardio.equipment}</p>
+                  </div>
+                  <div className="rounded-md border border-border p-3">
+                    <p className="text-muted-foreground">Intensity</p>
+                    <p className="font-medium">{currentBlock.cardio.intensity}</p>
+                  </div>
+                </div>
+                <Button className="w-full" onClick={() => logCardio(currentBlock)}>
+                  <Check className="mr-2 h-4 w-4" />
+                  Log {currentBlock.cardio.durationMinutes} Cardio Minutes
+                </Button>
+              </div>
+            )}
+
+            {currentBlock.type === 'posture' && currentBlock.posture && (
+              <div className="space-y-4">
+                {!session?.safetyAnswers ? (
+                  <div className="space-y-3">
+                    <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3">
+                      <p className="flex items-center gap-2 font-semibold"><ShieldAlert className="h-4 w-4" /> Neck Safety Check</p>
+                      <p className="mt-1 text-sm text-muted-foreground">Select any symptoms you have today. If any are present, posture work is blocked for this session.</p>
+                    </div>
+                    {redFlagFields.map((field) => (
+                      <label key={field.key} className="flex items-center justify-between rounded-md border border-border px-3 py-3 text-sm">
+                        <span>{field.label}</span>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(safetyDraft[field.key])}
+                          onChange={(event) => setSafetyDraft((prev) => ({ ...prev, [field.key]: event.target.checked }))}
+                          className="h-5 w-5"
+                        />
+                      </label>
+                    ))}
+                    <Button className="w-full" onClick={submitSafety}>Save Safety Check</Button>
+                  </div>
+                ) : !canLogPosture(session) ? (
+                  <div className="rounded-md border border-destructive/40 bg-destructive/10 p-4">
+                    <p className="font-semibold">Posture work blocked today</p>
+                    <p className="mt-2 text-sm text-muted-foreground">Because a red-flag symptom was selected, skip neck/posture drills and consider medical or physical therapy guidance before progressing.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <p className="text-sm text-muted-foreground">{currentBlock.posture.safetyNote}</p>
+                    {currentBlock.posture.items.map((item) => (
+                      <div key={item.id} className="rounded-md border border-border p-3">
+                        <p className="font-medium">{item.name}</p>
+                        <p className="text-sm text-muted-foreground">{item.target}</p>
+                        <p className="mt-1 text-xs text-muted-foreground">{item.notes}</p>
+                      </div>
+                    ))}
+                    <Button className="w-full" onClick={() => logPosture(currentBlock)}>
+                      <HeartPulse className="mr-2 h-4 w-4" />
+                      Complete Posture Routine
+                    </Button>
+                  </div>
+                )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {blockIndex >= workout.blocks.length - 1 && (
+          <Card>
+            <CardContent className="space-y-3 p-4">
+              <div>
+                <Label htmlFor="energy">Energy 1-10</Label>
+                <Input id="energy" inputMode="numeric" value={energy} onChange={(event) => setEnergy(event.target.value)} />
+              </div>
+              <div>
+                <Label htmlFor="body">Body notes</Label>
+                <Input id="body" value={body} onChange={(event) => setBody(event.target.value)} placeholder="Neck, back, knees, recovery..." />
+              </div>
+              <div>
+                <Label htmlFor="notes">Session notes</Label>
+                <Textarea id="notes" value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="What improved? What should change next time?" />
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        <div className="flex gap-2">
+          <Button variant="outline" className="flex-1" onClick={() => router.push('/program')}>
+            <X className="mr-2 h-4 w-4" />
+            Exit
+          </Button>
+          <Button className="flex-1" onClick={nextBlock}>
+            {blockIndex >= workout.blocks.length - 1 ? 'Finish' : 'Next Block'}
+            <ChevronRight className="ml-2 h-4 w-4" />
           </Button>
         </div>
-      )}
-
-      {/* Active Workout View */}
-      {state.phase === 'active' && currentBlock && currentExercise && (
-        <div className="flex-1 flex flex-col">
-          {/* Block Info */}
-          <div className="p-4 border-b border-border">
-            <div className="flex items-center justify-between">
-              <div>
-                <Badge 
-                  variant="outline" 
-                  className={blockTypeColors[currentBlock.type]}
-                >
-                  {currentBlock.type.toUpperCase()}
-                </Badge>
-                <h2 className="text-lg font-bold mt-1">{currentBlock.name}</h2>
-              </div>
-              <div className="text-right">
-                {currentBlock.type === 'rounds' && (
-                  <p className="text-sm text-muted-foreground">
-                    Round {state.currentRound} of {currentBlock.rounds}
-                  </p>
-                )}
-                {currentBlock.type === 'emom' && (
-                  <p className="text-sm text-muted-foreground">
-                    Minute {(state.currentRound - 1) * currentBlock.exercises.length + state.currentExerciseIndex + 1}
-                  </p>
-                )}
-                {currentBlock.type === 'amrap' && (
-                  <p className="text-sm text-muted-foreground">
-                    Rounds: {state.amrapRounds}
-                  </p>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* Current Exercise */}
-          <div className="flex-1 flex flex-col items-center justify-center p-6">
-            {/* Timer for countdown blocks */}
-            {(currentBlock.type === 'emom' || currentBlock.type === 'amrap' || 
-              currentBlock.type === 'warmup' || currentBlock.type === 'cooldown') && (
-              <ProgressRing 
-                progress={
-                  currentBlock.type === 'amrap' 
-                    ? 1 - (blockTimer.seconds / (currentBlock.durationSeconds || 600))
-                    : currentBlock.type === 'emom'
-                    ? 1 - (blockTimer.seconds / 60)
-                    : 1 - (blockTimer.seconds / (currentExercise.durationSeconds || 30))
-                }
-                size={180}
-                className="mb-6"
-              >
-                <div className="text-center">
-                  <p className="text-4xl font-mono font-bold">{blockTimer.formatTime()}</p>
-                </div>
-              </ProgressRing>
-            )}
-
-            {/* Exercise Name */}
-            <h1 className="text-3xl font-bold text-center mb-4">
-              {currentExercise.exercise.name}
-            </h1>
-
-            {/* Reps/Duration */}
-            <div className="text-center mb-6">
-              {currentExercise.reps && (
-                <p className="text-5xl font-bold text-primary">
-                  {currentExercise.reps}
-                  <span className="text-xl text-muted-foreground ml-2">reps</span>
-                </p>
-              )}
-              {currentExercise.durationSeconds && !currentExercise.reps && (
-                <p className="text-xl text-muted-foreground">
-                  {Math.floor(currentExercise.durationSeconds / 60)}:
-                  {(currentExercise.durationSeconds % 60).toString().padStart(2, '0')}
-                </p>
-              )}
-              {currentExercise.notes && (
-                <p className="text-muted-foreground mt-2">{currentExercise.notes}</p>
-              )}
-            </div>
-
-            {/* Next Exercise Preview */}
-            {state.currentExerciseIndex < currentBlock.exercises.length - 1 && (
-              <div className="text-center text-sm text-muted-foreground">
-                <span>Next: </span>
-                <span className="font-medium">
-                  {currentBlock.exercises[state.currentExerciseIndex + 1].exercise.name}
-                </span>
-              </div>
-            )}
-          </div>
-
-          {/* Action Buttons */}
-          <div className="p-4 space-y-2 border-t border-border">
-            <Button 
-              size="lg" 
-              className="w-full h-16 text-lg"
-              onClick={handleExerciseComplete}
-            >
-              <Check className="h-6 w-6 mr-2" />
-              Done
-            </Button>
-            <div className="flex gap-2">
-              <Button 
-                variant="outline" 
-                className="flex-1"
-                onClick={() => timer.isRunning ? timer.pause() : timer.start()}
-              >
-                {timer.isRunning ? (
-                  <><Pause className="h-4 w-4 mr-2" /> Pause</>
-                ) : (
-                  <><Play className="h-4 w-4 mr-2" /> Resume</>
-                )}
-              </Button>
-              <Button 
-                variant="outline" 
-                className="flex-1"
-                onClick={moveToNextBlock}
-              >
-                <SkipForward className="h-4 w-4 mr-2" />
-                Skip Block
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+      </div>
+    </main>
   );
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { WorkoutCard } from '@/components/library/WorkoutCard';
@@ -8,19 +8,13 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { getWorkouts } from '@/lib/store';
 import type { WorkoutWithBlocks } from '@/lib/types';
 import { Search } from 'lucide-react';
+import Link from 'next/link';
 
 export default function WorkoutsPage() {
-  const [workouts, setWorkouts] = useState<WorkoutWithBlocks[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [workouts] = useState<WorkoutWithBlocks[]>(() => getWorkouts());
+  const [loading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState('all');
-
-  useEffect(() => {
-    // Load workouts from the store (static data)
-    const allWorkouts = getWorkouts();
-    setWorkouts(allWorkouts);
-    setLoading(false);
-  }, []);
 
   const filteredWorkouts = workouts.filter(workout => {
     const matchesSearch = workout.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -38,8 +32,14 @@ export default function WorkoutsPage() {
     <div className="min-h-screen pb-20">
       <div className="sticky top-0 z-40 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
         <div className="mx-auto max-w-lg px-4 py-4">
-          <div className="flex items-center justify-between mb-4">
-            <h1 className="text-2xl font-bold">Workouts</h1>
+          <div className="flex items-center justify-between gap-3 mb-4">
+            <div>
+              <h1 className="text-2xl font-bold">Legacy Workouts</h1>
+              <p className="text-sm text-muted-foreground">The Silverthorne plan lives on Program.</p>
+            </div>
+            <Button variant="outline" size="sm" asChild>
+              <Link href="/program">Program</Link>
+            </Button>
           </div>
           
           <div className="relative mb-4">

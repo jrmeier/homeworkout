@@ -1,13 +1,17 @@
-const CACHE_NAME = 'iron-flow-v1';
+const CACHE_NAME = 'silverthorne-tone-v1';
 
 // Detect base path from service worker location
 const BASE_PATH = self.location.pathname.replace('/sw.js', '');
 
 const STATIC_ASSETS = [
   `${BASE_PATH}/`,
+  `${BASE_PATH}/program`,
   `${BASE_PATH}/workouts`,
   `${BASE_PATH}/exercises`,
   `${BASE_PATH}/history`,
+  `${BASE_PATH}/active/silverthorne-day-1`,
+  `${BASE_PATH}/icons/icon-192.png`,
+  `${BASE_PATH}/icons/icon-512.png`,
 ];
 
 // Install event - cache static assets
@@ -68,6 +72,9 @@ self.addEventListener('fetch', (event) => {
       }).catch(() => {
         // Offline fallback for navigation requests
         if (event.request.mode === 'navigate') {
+          if (event.request.url.includes('/active/')) {
+            return caches.match(`${BASE_PATH}/active/silverthorne-day-1`);
+          }
           return caches.match(`${BASE_PATH}/`);
         }
       });

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useMemo } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -39,15 +39,8 @@ interface WorkoutDetailClientProps {
 }
 
 export default function WorkoutDetailClient({ workoutId }: WorkoutDetailClientProps) {
-  const [workout, setWorkout] = useState<WorkoutWithBlocks | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    // Load workout from the store
-    const workoutData = getWorkoutById(parseInt(workoutId));
-    setWorkout(workoutData);
-    setLoading(false);
-  }, [workoutId]);
+  const workout = useMemo<WorkoutWithBlocks | null>(() => getWorkoutById(parseInt(workoutId)), [workoutId]);
+  const loading = false;
 
   if (loading) {
     return (

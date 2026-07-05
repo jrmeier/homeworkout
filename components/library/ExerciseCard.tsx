@@ -3,7 +3,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import type { Exercise } from '@/lib/types';
-import { Dumbbell, Target } from 'lucide-react';
+import { Dumbbell } from 'lucide-react';
 
 interface ExerciseCardProps {
   exercise: Exercise;

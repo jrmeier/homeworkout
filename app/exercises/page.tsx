@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { ExerciseCard } from '@/components/library/ExerciseCard';
@@ -18,17 +18,10 @@ import { Search, Filter } from 'lucide-react';
 const equipmentOptions = ['bodyweight', 'kettlebell', 'barbell', 'dumbbell', 'band', 'none'];
 
 export default function ExercisesPage() {
-  const [exercises, setExercises] = useState<Exercise[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [exercises] = useState<Exercise[]>(() => getExercises());
+  const [loading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterEquipment, setFilterEquipment] = useState<string>('all');
-
-  useEffect(() => {
-    // Load exercises from the store (static data)
-    const allExercises = getExercises();
-    setExercises(allExercises);
-    setLoading(false);
-  }, []);
 
   const filteredExercises = exercises.filter(exercise => {
     const matchesSearch = exercise.name.toLowerCase().includes(searchQuery.toLowerCase()) ||

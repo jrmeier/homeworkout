@@ -148,3 +148,149 @@ export interface SessionWithWorkout {
     estimatedMinutes: number | null;
   };
 }
+
+export type ProgramBlockType = 'warmup' | 'strength' | 'cardio' | 'posture' | 'cooldown';
+export type ProgramWorkoutFocus = 'upper-pull' | 'lower-core' | 'upper-hypertrophy' | 'conditioning' | 'recovery';
+
+export interface ExercisePrescription {
+  id: string;
+  name: string;
+  target: string;
+  sets?: number;
+  reps?: string;
+  durationMinutes?: number;
+  restSeconds?: number;
+  equipment: string;
+  muscleGroups: string[];
+  notes: string;
+  alternatives?: string[];
+}
+
+export interface CardioPrescription {
+  id: string;
+  name: string;
+  equipment: string;
+  durationMinutes: number;
+  intensity: string;
+  instructions: string;
+}
+
+export interface PostureRoutine {
+  id: string;
+  name: string;
+  durationMinutes: number;
+  items: ExercisePrescription[];
+  safetyNote: string;
+}
+
+export interface ProgramBlock {
+  id: string;
+  type: ProgramBlockType;
+  name: string;
+  durationMinutes: number;
+  exercises?: ExercisePrescription[];
+  cardio?: CardioPrescription;
+  posture?: PostureRoutine;
+  notes?: string;
+}
+
+export interface ScheduledWorkout {
+  id: string;
+  dayOffset: number;
+  dayLabel: string;
+  required: boolean;
+  name: string;
+  focus: ProgramWorkoutFocus;
+  estimatedMinutes: number;
+  summary: string;
+  blocks: ProgramBlock[];
+}
+
+export interface ProgramWeek {
+  weekNumber: number;
+  workouts: ScheduledWorkout[];
+}
+
+export interface ProgressionRule {
+  id: string;
+  description: string;
+}
+
+export interface Program {
+  id: string;
+  name: string;
+  startDate: string;
+  facility: string;
+  summary: string;
+  weeks: ProgramWeek[];
+  progressionRules: ProgressionRule[];
+}
+
+export interface SafetyAnswers {
+  checkedAt: string;
+  numbnessOrTingling: boolean;
+  radiatingPain: boolean;
+  dizziness: boolean;
+  severeHeadache: boolean;
+  recentTrauma: boolean;
+  weakness: boolean;
+  worseningPain: boolean;
+  acknowledged: boolean;
+}
+
+export interface StrengthSetLog {
+  exerciseId: string;
+  exerciseName: string;
+  setNumber: number;
+  reps: number | null;
+  weight: number | null;
+  rpe: number | null;
+  completedAt: string;
+}
+
+export interface CardioLog {
+  blockId: string;
+  equipment: string;
+  minutes: number;
+  intensity: string;
+  completedAt: string;
+}
+
+export interface PostureLog {
+  routineId: string;
+  minutes: number;
+  completedAt: string;
+}
+
+export interface ProgramSession {
+  id: string;
+  workoutId: string;
+  workoutName: string;
+  required: boolean;
+  startedAt: string;
+  completedAt: string | null;
+  notes: string;
+  energy: number | null;
+  body: string;
+  safetyAnswers: SafetyAnswers | null;
+  strengthSets: StrengthSetLog[];
+  cardioLogs: CardioLog[];
+  postureLogs: PostureLog[];
+}
+
+export interface ProgramState {
+  version: 1;
+  activeProgramId: string;
+  migratedAt: string;
+  sessions: ProgramSession[];
+}
+
+export interface DashboardStats {
+  requiredCompletedThisWeek: number;
+  requiredTotalThisWeek: number;
+  optionalCompletedThisWeek: number;
+  postureStreak: number;
+  cardioMinutesThisWeek: number;
+  totalProgramSessions: number;
+  lastPerformance: ProgramSession | null;
+}

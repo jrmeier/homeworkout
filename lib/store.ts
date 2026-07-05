@@ -4,8 +4,17 @@
 // Static workout/exercise data is in lib/data/workouts.ts
 
 import { EXERCISES, WORKOUTS } from '@/lib/data/workouts';
+import { SILVERTHORNE_PROGRAM, SILVERTHORNE_WORKOUTS, getScheduledWorkout } from '@/lib/data/program';
 import type {
+  CardioLog,
+  DashboardStats,
   Exercise,
+  Program,
+  ProgramSession,
+  ProgramState,
+  SafetyAnswers,
+  ScheduledWorkout,
+  StrengthSetLog,
   WorkoutWithBlocks,
   WorkoutStats,
   SessionWithWorkout,
@@ -13,6 +22,7 @@ import type {
 
 // Re-export static data for convenience
 export { EXERCISES, WORKOUTS };
+export { SILVERTHORNE_PROGRAM, SILVERTHORNE_WORKOUTS, getScheduledWorkout };
 
 // =============================================================================
 // LOCALSTORAGE KEYS
@@ -21,7 +31,10 @@ export { EXERCISES, WORKOUTS };
 const STORAGE_KEYS = {
   SESSIONS: 'workout_sessions',
   SESSION_LOGS: 'session_logs',
+  PROGRAM_STATE: 'silverthorne_program_state_v1',
 } as const;
+
+const PROGRAM_STATE_VERSION = 1 as const;
 
 // =============================================================================
 // SESSION STORAGE TYPES
@@ -71,6 +84,87 @@ function getSessionLogs(): StoredSessionLog[] {
 function saveSessionLogs(logs: StoredSessionLog[]): void {
   if (typeof window === 'undefined') return;
   localStorage.setItem(STORAGE_KEYS.SESSION_LOGS, JSON.stringify(logs));
+}
+
+function safeParse<T>(value: string | null, fallback: T): T {
+  if (!value) return fallback;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+function hasSafetyRedFlag(answers: SafetyAnswers | null): boolean {
+  if (!answers || !answers.acknowledged) return true;
+  return answers.numbnessOrTingling || answers.radiatingPain || answers.dizziness ||
+    answers.severeHeadache || answers.recentTrauma || answers.weakness || answers.worseningPain;
+}
+
+function createEmptyProgramState(): ProgramState {
+  return {
+    version: PROGRAM_STATE_VERSION,
+    activeProgramId: SILVERTHORNE_PROGRAM.id,
+    migratedAt: new Date().toISOString(),
+    sessions: [],
+  };
+}
+
+function getProgramStateInternal(): ProgramState {
+  if (typeof window === 'undefined') return createEmptyProgramState();
+  const parsed = safeParse<Partial<ProgramState> | null>(localStorage.getItem(STORAGE_KEYS.PROGRAM_STATE), null);
+
+  if (!parsed || parsed.version !== PROGRAM_STATE_VERSION || !Array.isArray(parsed.sessions)) {
+    const fresh = createEmptyProgramState();
+    localStorage.setItem(STORAGE_KEYS.PROGRAM_STATE, JSON.stringify(fresh));
+    return fresh;
+  }
+
+  return {
+    version: PROGRAM_STATE_VERSION,
+    activeProgramId: parsed.activeProgramId || SILVERTHORNE_PROGRAM.id,
+    migratedAt: parsed.migratedAt || new Date().toISOString(),
+    sessions: parsed.sessions,
+  };
+}
+
+function saveProgramState(state: ProgramState): void {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem(STORAGE_KEYS.PROGRAM_STATE, JSON.stringify(state));
+}
+
+function localDateString(date: Date): string {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, '0');
+  const day = `${date.getDate()}`.padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function startOfLocalWeek(date: Date): Date {
+  const start = new Date(date);
+  start.setHours(0, 0, 0, 0);
+  const day = start.getDay();
+  const mondayOffset = day === 0 ? -6 : 1 - day;
+  start.setDate(start.getDate() + mondayOffset);
+  return start;
+}
+
+function addDays(date: Date, days: number): Date {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function sessionCompletedOn(session: ProgramSession, date: Date): boolean {
+  if (!session.completedAt) return false;
+  return localDateString(new Date(session.completedAt)) === localDateString(date);
+}
+
+function isThisWeek(isoDate: string, now = new Date()): boolean {
+  const date = new Date(isoDate);
+  const start = startOfLocalWeek(now);
+  const end = addDays(start, 7);
+  return date >= start && date < end;
 }
 
 // =============================================================================
@@ -270,5 +364,187 @@ export function getStats(): WorkoutStats {
     totalMinutes: Math.round(totalMinutes),
     topExercises,
     recentHistory,
+  };
+}
+
+// =============================================================================
+// SILVERTHORNE PROGRAM API
+// =============================================================================
+
+export function getProgram(): Program {
+  return SILVERTHORNE_PROGRAM;
+}
+
+export function getProgramState(): ProgramState {
+  return getProgramStateInternal();
+}
+
+export function getProgramSessions(): ProgramSession[] {
+  return getProgramStateInternal().sessions
+    .slice()
+    .sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime());
+}
+
+export function getWorkoutDate(workout: ScheduledWorkout, now = new Date()): Date {
+  const programStart = new Date(`${SILVERTHORNE_PROGRAM.startDate}T00:00:00`);
+  const weekStart = now < programStart ? programStart : startOfLocalWeek(now);
+  return addDays(weekStart, workout.dayOffset);
+}
+
+export function getNextScheduledWorkout(now = new Date()): ScheduledWorkout {
+  const sessions = getProgramStateInternal().sessions;
+  const required = SILVERTHORNE_WORKOUTS.filter((workout) => workout.required);
+
+  const incompleteRequired = required.find((workout) => {
+    const scheduledDate = getWorkoutDate(workout, now);
+    return !sessions.some((session) =>
+      session.workoutId === workout.id && session.completedAt && sessionCompletedOn(session, scheduledDate)
+    );
+  });
+
+  if (incompleteRequired) return incompleteRequired;
+  return SILVERTHORNE_WORKOUTS.find((workout) => !workout.required) || required[0];
+}
+
+export function startProgramSession(workoutId: string): ProgramSession {
+  const workout = getScheduledWorkout(workoutId);
+  if (!workout) {
+    throw new Error(`Scheduled workout ${workoutId} not found`);
+  }
+
+  const state = getProgramStateInternal();
+  const existing = state.sessions.find((session) => session.workoutId === workoutId && !session.completedAt);
+  if (existing) return existing;
+
+  const session: ProgramSession = {
+    id: `session-${Date.now()}`,
+    workoutId,
+    workoutName: workout.name,
+    required: workout.required,
+    startedAt: new Date().toISOString(),
+    completedAt: null,
+    notes: '',
+    energy: null,
+    body: '',
+    safetyAnswers: null,
+    strengthSets: [],
+    cardioLogs: [],
+    postureLogs: [],
+  };
+
+  state.sessions.push(session);
+  saveProgramState(state);
+  return session;
+}
+
+export function saveSafetyAnswers(sessionId: string, answers: Omit<SafetyAnswers, 'checkedAt'>): ProgramSession | null {
+  const state = getProgramStateInternal();
+  const session = state.sessions.find((item) => item.id === sessionId);
+  if (!session) return null;
+  session.safetyAnswers = {
+    ...answers,
+    checkedAt: new Date().toISOString(),
+  };
+  saveProgramState(state);
+  return session;
+}
+
+export function addStrengthSet(sessionId: string, set: Omit<StrengthSetLog, 'completedAt'>): ProgramSession | null {
+  const state = getProgramStateInternal();
+  const session = state.sessions.find((item) => item.id === sessionId);
+  if (!session) return null;
+  session.strengthSets.push({
+    ...set,
+    completedAt: new Date().toISOString(),
+  });
+  saveProgramState(state);
+  return session;
+}
+
+export function addCardioLog(sessionId: string, log: Omit<CardioLog, 'completedAt'>): ProgramSession | null {
+  const state = getProgramStateInternal();
+  const session = state.sessions.find((item) => item.id === sessionId);
+  if (!session) return null;
+  session.cardioLogs.push({
+    ...log,
+    completedAt: new Date().toISOString(),
+  });
+  saveProgramState(state);
+  return session;
+}
+
+export function completePostureRoutine(sessionId: string, routineId: string, minutes: number): ProgramSession | null {
+  const state = getProgramStateInternal();
+  const session = state.sessions.find((item) => item.id === sessionId);
+  if (!session || hasSafetyRedFlag(session.safetyAnswers)) return null;
+
+  session.postureLogs.push({
+    routineId,
+    minutes,
+    completedAt: new Date().toISOString(),
+  });
+  saveProgramState(state);
+  return session;
+}
+
+export function completeProgramSession(
+  sessionId: string,
+  updates: { notes?: string; energy?: number | null; body?: string } = {}
+): ProgramSession | null {
+  const state = getProgramStateInternal();
+  const session = state.sessions.find((item) => item.id === sessionId);
+  if (!session) return null;
+  session.completedAt = new Date().toISOString();
+  session.notes = updates.notes ?? session.notes;
+  session.energy = updates.energy ?? session.energy;
+  session.body = updates.body ?? session.body;
+  saveProgramState(state);
+  return session;
+}
+
+export function canLogPosture(session: ProgramSession | null): boolean {
+  return !hasSafetyRedFlag(session?.safetyAnswers ?? null);
+}
+
+export function getDashboardStats(now = new Date()): DashboardStats {
+  const sessions = getProgramStateInternal().sessions;
+  const completed = sessions.filter((session) => session.completedAt);
+  const completedThisWeek = completed.filter((session) => session.completedAt && isThisWeek(session.completedAt, now));
+  const requiredCompletedThisWeek = completedThisWeek.filter((session) => session.required).length;
+  const optionalCompletedThisWeek = completedThisWeek.filter((session) => !session.required).length;
+  const cardioMinutesThisWeek = completedThisWeek.reduce(
+    (total, session) => total + session.cardioLogs.reduce((sum, log) => sum + log.minutes, 0),
+    0
+  );
+
+  const postureDates = [...new Set(
+    completed
+      .flatMap((session) => session.postureLogs.map((log) => localDateString(new Date(log.completedAt))))
+  )].sort().reverse();
+
+  let postureStreak = 0;
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+  for (let i = 0; i < postureDates.length; i++) {
+    const expected = addDays(today, -i);
+    if (postureDates.includes(localDateString(expected))) {
+      postureStreak += 1;
+    } else if (i === 0 && postureDates.includes(localDateString(addDays(today, -1)))) {
+      postureStreak += 1;
+    } else {
+      break;
+    }
+  }
+
+  return {
+    requiredCompletedThisWeek,
+    requiredTotalThisWeek: SILVERTHORNE_WORKOUTS.filter((workout) => workout.required).length,
+    optionalCompletedThisWeek,
+    postureStreak,
+    cardioMinutesThisWeek,
+    totalProgramSessions: completed.length,
+    lastPerformance: completed
+      .slice()
+      .sort((a, b) => new Date(b.completedAt!).getTime() - new Date(a.completedAt!).getTime())[0] || null,
   };
 }

@@ -7,9 +7,9 @@ const basePath = process.env.NODE_ENV === 'production' ? '/homeworkout' : '';
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: 'Iron Flow - Workout Tracker',
-    short_name: 'Iron Flow',
-    description: 'CrossFit-style workout tracker with timers, exercise library, and progress tracking',
+    name: 'Silverthorne Tone Builder',
+    short_name: 'Tone Builder',
+    description: 'Facility-based strength, cardio, and posture workout tracker for Silverthorne Recreation Center',
     start_url: `${basePath}/`,
     display: 'standalone',
     background_color: '#0a0a0a',
@@ -17,15 +17,15 @@ export default function manifest(): MetadataRoute.Manifest {
     orientation: 'portrait',
     icons: [
       {
-        src: `${basePath}/icons/icon-192.svg`,
+        src: `${basePath}/icons/icon-192.png`,
         sizes: '192x192',
-        type: 'image/svg+xml',
+        type: 'image/png',
         purpose: 'maskable',
       },
       {
-        src: `${basePath}/icons/icon-512.svg`,
+        src: `${basePath}/icons/icon-512.png`,
         sizes: '512x512',
-        type: 'image/svg+xml',
+        type: 'image/png',
         purpose: 'any',
       },
     ],

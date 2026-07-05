@@ -17,12 +17,12 @@ const geistMono = Geist_Mono({
 const basePath = process.env.NODE_ENV === 'production' ? '/homeworkout' : '';
 
 export const metadata: Metadata = {
-  title: "Iron Flow - Workout Tracker",
-  description: "CrossFit-style workout tracker with timers, exercise library, and progress tracking",
+  title: "Silverthorne Tone Builder",
+  description: "Facility-based strength, cardio, and posture workout tracker",
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
-    title: "Iron Flow",
+    title: "Tone Builder",
   },
   formatDetection: {
     telephone: false,
@@ -45,8 +45,9 @@ export default function RootLayout({
   return (
     <html lang="en" className="dark">
       <head>
-        <link rel="apple-touch-icon" href={`${basePath}/icons/icon-192.svg`} />
+        <link rel="apple-touch-icon" href={`${basePath}/icons/icon-192.png`} />
         <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="mobile-web-app-capable" content="yes" />
         <script
           dangerouslySetInnerHTML={{
             __html: `
