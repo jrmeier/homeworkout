@@ -57,8 +57,14 @@ export default function ActiveWorkoutClient({ workoutId }: ActiveWorkoutClientPr
   const [safetyDraft, setSafetyDraft] = useState<Record<string, boolean>>({});
   const [soundOn, setSoundOn] = useState(true);
   const [complete, setComplete] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
   const wakeLock = useWakeLock();
   const totalTimer = useTimer({ initialSeconds: 0, countDown: false });
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setHydrated(true), 0);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   useEffect(() => {
     if (!workout) return;
@@ -247,6 +253,15 @@ export default function ActiveWorkoutClient({ workoutId }: ActiveWorkoutClientPr
           <CardContent className="space-y-4">
             {currentBlock.notes && <p className="text-sm text-muted-foreground">{currentBlock.notes}</p>}
 
+            {currentBlock.type === 'warmup' && (
+              <div className="rounded-md border border-border bg-muted/40 p-3 text-sm">
+                <p className="font-medium">Prep is not logged as strength reps.</p>
+                <p className="mt-1 text-muted-foreground">
+                  Do the prep work, then tap Complete Prep. The next block is where you enter reps, weight, and RPE for each set.
+                </p>
+              </div>
+            )}
+
             {currentBlock.type === 'strength' && currentBlock.exercises?.map((exercise) => {
               const logged = session?.strengthSets.filter((set) => set.exerciseId === exercise.id).length || 0;
               const draft = exerciseInputs[exercise.id] || { reps: '', weight: '', rpe: '' };
@@ -264,14 +279,23 @@ export default function ActiveWorkoutClient({ workoutId }: ActiveWorkoutClientPr
                     {exercise.alternatives && <p className="mt-1 text-xs text-muted-foreground">Alt: {exercise.alternatives.join(', ')}</p>}
                   </div>
                   <div className="grid grid-cols-3 gap-2">
-                    <Input inputMode="numeric" placeholder="Reps" value={draft.reps} onChange={(event) => setExerciseInputs((prev) => ({ ...prev, [exercise.id]: { ...draft, reps: event.target.value } }))} />
-                    <Input inputMode="decimal" placeholder="Weight" value={draft.weight} onChange={(event) => setExerciseInputs((prev) => ({ ...prev, [exercise.id]: { ...draft, weight: event.target.value } }))} />
-                    <Input inputMode="numeric" placeholder="RPE" value={draft.rpe} onChange={(event) => setExerciseInputs((prev) => ({ ...prev, [exercise.id]: { ...draft, rpe: event.target.value } }))} />
+                    <div>
+                      <Label className="text-xs text-muted-foreground">Reps</Label>
+                      <Input inputMode="numeric" placeholder="10" value={draft.reps} onChange={(event) => setExerciseInputs((prev) => ({ ...prev, [exercise.id]: { ...draft, reps: event.target.value } }))} />
+                    </div>
+                    <div>
+                      <Label className="text-xs text-muted-foreground">Weight</Label>
+                      <Input inputMode="decimal" placeholder="80" value={draft.weight} onChange={(event) => setExerciseInputs((prev) => ({ ...prev, [exercise.id]: { ...draft, weight: event.target.value } }))} />
+                    </div>
+                    <div>
+                      <Label className="text-xs text-muted-foreground">RPE</Label>
+                      <Input inputMode="numeric" placeholder="7" value={draft.rpe} onChange={(event) => setExerciseInputs((prev) => ({ ...prev, [exercise.id]: { ...draft, rpe: event.target.value } }))} />
+                    </div>
                   </div>
-                  <Button variant="outline" className="w-full" onClick={() => logStrengthSet(exercise)}>
-                    <Plus className="mr-2 h-4 w-4" />
-                    Log Set
-                  </Button>
+            <Button variant="outline" className="w-full" disabled={!hydrated} onClick={() => logStrengthSet(exercise)}>
+              <Plus className="mr-2 h-4 w-4" />
+              {hydrated ? 'Log This Set' : 'Loading Controls'}
+            </Button>
                 </div>
               );
             })}
@@ -290,7 +314,7 @@ export default function ActiveWorkoutClient({ workoutId }: ActiveWorkoutClientPr
                     <p className="font-medium">{currentBlock.cardio.intensity}</p>
                   </div>
                 </div>
-                <Button className="w-full" onClick={() => logCardio(currentBlock)}>
+                <Button className="w-full" disabled={!hydrated} onClick={() => logCardio(currentBlock)}>
                   <Check className="mr-2 h-4 w-4" />
                   Log {currentBlock.cardio.durationMinutes} Cardio Minutes
                 </Button>
@@ -316,7 +340,7 @@ export default function ActiveWorkoutClient({ workoutId }: ActiveWorkoutClientPr
                         />
                       </label>
                     ))}
-                    <Button className="w-full" onClick={submitSafety}>Save Safety Check</Button>
+                    <Button className="w-full" disabled={!hydrated} onClick={submitSafety}>Save Safety Check</Button>
                   </div>
                 ) : !canLogPosture(session) ? (
                   <div className="rounded-md border border-destructive/40 bg-destructive/10 p-4">
@@ -333,7 +357,7 @@ export default function ActiveWorkoutClient({ workoutId }: ActiveWorkoutClientPr
                         <p className="mt-1 text-xs text-muted-foreground">{item.notes}</p>
                       </div>
                     ))}
-                    <Button className="w-full" onClick={() => logPosture(currentBlock)}>
+                    <Button className="w-full" disabled={!hydrated} onClick={() => logPosture(currentBlock)}>
                       <HeartPulse className="mr-2 h-4 w-4" />
                       Complete Posture Routine
                     </Button>
@@ -364,12 +388,12 @@ export default function ActiveWorkoutClient({ workoutId }: ActiveWorkoutClientPr
         )}
 
         <div className="flex gap-2">
-          <Button variant="outline" className="flex-1" onClick={() => router.push('/program')}>
+          <Button variant="outline" className="flex-1" disabled={!hydrated} onClick={() => router.push('/program')}>
             <X className="mr-2 h-4 w-4" />
             Exit
           </Button>
-          <Button className="flex-1" onClick={nextBlock}>
-            {blockIndex >= workout.blocks.length - 1 ? 'Finish' : 'Next Block'}
+          <Button className="flex-1" disabled={!hydrated} onClick={nextBlock}>
+            {!hydrated ? 'Loading Controls' : blockIndex >= workout.blocks.length - 1 ? 'Finish' : currentBlock.type === 'warmup' ? 'Complete Prep' : 'Next Block'}
             <ChevronRight className="ml-2 h-4 w-4" />
           </Button>
         </div>
