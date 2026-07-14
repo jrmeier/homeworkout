@@ -9,6 +9,7 @@ import type {
   WorkoutWithBlocks,
   WorkoutStats,
   SessionWithWorkout,
+  WorkoutProgress,
 } from '@/lib/types';
 
 // Re-export static data for convenience
@@ -27,16 +28,17 @@ const STORAGE_KEYS = {
 // SESSION STORAGE TYPES
 // =============================================================================
 
-interface StoredSession {
+export interface StoredSession {
   id: number;
   workoutId: number;
   startedAt: string;
   completedAt: string | null;
   totalRounds: number | null;
   notes: string | null;
+  progress?: WorkoutProgress | null;
 }
 
-interface StoredSessionLog {
+export interface StoredSessionLog {
   id: number;
   sessionId: number;
   exerciseId: number;
@@ -51,10 +53,25 @@ interface StoredSessionLog {
 // INTERNAL STORAGE FUNCTIONS
 // =============================================================================
 
-function getSessions(): StoredSession[] {
+function readStoredArray<T>(key: string): T[] {
   if (typeof window === 'undefined') return [];
-  const data = localStorage.getItem(STORAGE_KEYS.SESSIONS);
-  return data ? JSON.parse(data) : [];
+  try {
+    const data = localStorage.getItem(key);
+    if (!data) return [];
+    const parsed: unknown = JSON.parse(data);
+    return Array.isArray(parsed) ? parsed as T[] : [];
+  } catch {
+    return [];
+  }
+}
+
+function getSessions(): StoredSession[] {
+  return readStoredArray<StoredSession>(STORAGE_KEYS.SESSIONS).filter((session): session is StoredSession =>
+    typeof session?.id === 'number' &&
+    typeof session.workoutId === 'number' &&
+    typeof session.startedAt === 'string' &&
+    (typeof session.completedAt === 'string' || session.completedAt === null)
+  );
 }
 
 function saveSessions(sessions: StoredSession[]): void {
@@ -63,9 +80,12 @@ function saveSessions(sessions: StoredSession[]): void {
 }
 
 function getSessionLogs(): StoredSessionLog[] {
-  if (typeof window === 'undefined') return [];
-  const data = localStorage.getItem(STORAGE_KEYS.SESSION_LOGS);
-  return data ? JSON.parse(data) : [];
+  return readStoredArray<StoredSessionLog>(STORAGE_KEYS.SESSION_LOGS).filter((log): log is StoredSessionLog =>
+    typeof log?.id === 'number' &&
+    typeof log.sessionId === 'number' &&
+    typeof log.exerciseId === 'number' &&
+    typeof log.timestamp === 'string'
+  );
 }
 
 function saveSessionLogs(logs: StoredSessionLog[]): void {
@@ -117,8 +137,18 @@ export function createSession(workoutId: number): StoredSession {
   return newSession;
 }
 
+// Reuse the latest unfinished session so an accidental refresh or revisit does not
+// create duplicate "in progress" entries for the same workout.
+export function getOrCreateActiveSession(workoutId: number): StoredSession {
+  const activeSession = getSessions()
+    .filter(session => session.workoutId === workoutId && session.completedAt === null)
+    .sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime())[0];
+
+  return activeSession || createSession(workoutId);
+}
+
 // Update a session (e.g., mark as complete)
-export function updateSession(sessionId: number, updates: Partial<Pick<StoredSession, 'completedAt' | 'totalRounds' | 'notes'>>): StoredSession | null {
+export function updateSession(sessionId: number, updates: Partial<Pick<StoredSession, 'completedAt' | 'totalRounds' | 'notes' | 'progress'>>): StoredSession | null {
   const sessions = getSessions();
   const index = sessions.findIndex(s => s.id === sessionId);
   
@@ -133,28 +163,29 @@ export function updateSession(sessionId: number, updates: Partial<Pick<StoredSes
 // Get all sessions with workout info
 export function getSessionsWithWorkout(): SessionWithWorkout[] {
   const sessions = getSessions();
-  
-  return sessions
-    .map(session => {
-      const workout = WORKOUTS.find(w => w.id === session.workoutId);
-      if (!workout) return null;
-      
-      return {
+
+  const sessionsWithWorkout: SessionWithWorkout[] = [];
+  for (const session of sessions) {
+    const workout = WORKOUTS.find(w => w.id === session.workoutId);
+    if (workout) {
+      sessionsWithWorkout.push({
         id: session.id,
         workoutId: session.workoutId,
         startedAt: session.startedAt,
         completedAt: session.completedAt,
         totalRounds: session.totalRounds,
         notes: session.notes,
+        progress: session.progress || null,
         workout: {
           id: workout.id,
           name: workout.name,
           estimatedMinutes: workout.estimatedMinutes,
         },
-      };
-    })
-    .filter((s): s is SessionWithWorkout => s !== null)
-    .sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime());
+      });
+    }
+  }
+
+  return sessionsWithWorkout.sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime());
 }
 
 // Add a session log
@@ -174,6 +205,10 @@ export function addSessionLog(log: Omit<StoredSessionLog, 'id' | 'timestamp'>): 
   return newLog;
 }
 
+function toLocalDateKey(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
 // Get stats
 export function getStats(): WorkoutStats {
   const sessions = getSessions();
@@ -185,14 +220,14 @@ export function getStats(): WorkoutStats {
   // Sessions this week
   const oneWeekAgo = new Date();
   oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
-  const sessionsThisWeek = sessions.filter(
-    s => new Date(s.startedAt) >= oneWeekAgo
+  const sessionsThisWeek = completedSessions.filter(
+    s => new Date(s.completedAt!) >= oneWeekAgo
   );
   
   // Calculate streak
   const uniqueDates = [...new Set(
     completedSessions
-      .map(s => new Date(s.completedAt!).toISOString().split('T')[0])
+      .map(s => toLocalDateKey(new Date(s.completedAt!)))
   )].sort().reverse();
   
   let streak = 0;
@@ -200,7 +235,7 @@ export function getStats(): WorkoutStats {
   today.setHours(0, 0, 0, 0);
   
   for (let i = 0; i < uniqueDates.length; i++) {
-    const sessionDate = new Date(uniqueDates[i]);
+    const sessionDate = new Date(`${uniqueDates[i]}T00:00:00`);
     sessionDate.setHours(0, 0, 0, 0);
     
     const expectedDate = new Date(today);
@@ -244,13 +279,14 @@ export function getStats(): WorkoutStats {
     if (session.startedAt && session.completedAt) {
       const start = new Date(session.startedAt).getTime();
       const end = new Date(session.completedAt).getTime();
-      return acc + (end - start) / (1000 * 60);
+      return acc + Math.max(0, (end - start) / (1000 * 60));
     }
     return acc;
   }, 0);
   
   // Recent history
-  const recentHistory = completedSessions
+  const recentHistory = [...completedSessions]
+    .sort((a, b) => new Date(b.completedAt!).getTime() - new Date(a.completedAt!).getTime())
     .slice(0, 10)
     .map(session => {
       const workout = WORKOUTS.find(w => w.id === session.workoutId);

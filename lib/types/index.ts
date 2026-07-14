@@ -46,6 +46,17 @@ export interface WorkoutSession {
   completedAt: Date | null;
   totalRounds: number | null;
   notes: string | null;
+  progress?: WorkoutProgress | null;
+}
+
+export interface WorkoutProgress {
+  phase: 'active' | 'rest';
+  currentBlockIndex: number;
+  currentExerciseIndex: number;
+  currentRound: number;
+  amrapRounds: number;
+  elapsedSeconds: number;
+  blockSeconds: number;
 }
 
 export interface SessionLog {
@@ -142,6 +153,7 @@ export interface SessionWithWorkout {
   completedAt: string | null;
   totalRounds: number | null;
   notes: string | null;
+  progress?: WorkoutProgress | null;
   workout: {
     id: number;
     name: string;

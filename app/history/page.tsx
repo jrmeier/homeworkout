@@ -9,7 +9,7 @@ import { getStats, getSessionsWithWorkout } from '@/lib/store';
 import type { WorkoutStats, SessionWithWorkout } from '@/lib/types';
 import { 
   Clock, Calendar, Trophy, Flame, TrendingUp, 
-  Dumbbell
+  Dumbbell, Play
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -20,10 +20,12 @@ export default function HistoryPage() {
   const [activeTab, setActiveTab] = useState('history');
 
   useEffect(() => {
-    // Load from localStorage store
-    setStats(getStats());
-    setSessions(getSessionsWithWorkout());
-    setLoading(false);
+    const loadHistory = window.setTimeout(() => {
+      setStats(getStats());
+      setSessions(getSessionsWithWorkout());
+      setLoading(false);
+    }, 0);
+    return () => window.clearTimeout(loadHistory);
   }, []);
 
   const formatDate = (dateStr: string) => {
@@ -110,7 +112,7 @@ export default function HistoryPage() {
                     {daySessions.map((session) => {
                       const duration = calculateDuration(session.startedAt, session.completedAt);
                       return (
-                        <Card key={session.id}>
+                        <Card key={session.id} className={!session.completedAt ? 'border-primary/30 bg-primary/5' : undefined}>
                           <CardContent className="p-4">
                             <div className="flex items-center justify-between">
                               <div>
@@ -127,13 +129,22 @@ export default function HistoryPage() {
                                     </Badge>
                                   )}
                                 </div>
+                                {session.notes && (
+                                  <p className="mt-2 text-sm text-muted-foreground line-clamp-2">
+                                    {session.notes}
+                                  </p>
+                                )}
                               </div>
                               {session.completedAt ? (
                                 <Badge variant="default" className="bg-green-500/20 text-green-500">
                                   Complete
                                 </Badge>
                               ) : (
-                                <Badge variant="outline">In Progress</Badge>
+                                <Button size="sm" variant="outline" asChild>
+                                  <Link href={`/active/${session.workoutId}`}>
+                                    <Play className="mr-1 h-3 w-3" /> Continue
+                                  </Link>
+                                </Button>
                               )}
                             </div>
                           </CardContent>

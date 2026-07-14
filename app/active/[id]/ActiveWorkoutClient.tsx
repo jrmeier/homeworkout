@@ -1,16 +1,17 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { ProgressRing } from '@/components/workout/ProgressRing';
+import { Textarea } from '@/components/ui/textarea';
 import { useTimer } from '@/lib/hooks/useTimer';
 import { useWakeLock } from '@/lib/hooks/useWakeLock';
-import { getWorkoutById, createSession, updateSession } from '@/lib/store';
-import type { WorkoutWithBlocks } from '@/lib/types';
+import { addSessionLog, getOrCreateActiveSession, getWorkoutById, updateSession } from '@/lib/store';
+import type { WorkoutProgress, WorkoutWithBlocks } from '@/lib/types';
 import { 
   Play, Pause, SkipForward, X, Check, 
   Flame, Volume2, VolumeX 
@@ -44,6 +45,8 @@ export default function ActiveWorkoutClient({ workoutId }: ActiveWorkoutClientPr
   const [workout, setWorkout] = useState<WorkoutWithBlocks | null>(null);
   const [loading, setLoading] = useState(true);
   const [soundEnabled, setSoundEnabled] = useState(true);
+  const [sessionNotes, setSessionNotes] = useState('');
+  const recordedExerciseKeys = useRef(new Set<string>());
   
   const [state, setState] = useState<WorkoutState>({
     phase: 'ready',
@@ -72,10 +75,11 @@ export default function ActiveWorkoutClient({ workoutId }: ActiveWorkoutClientPr
   });
 
   useEffect(() => {
-    // Load workout from the store
-    const workoutData = getWorkoutById(parseInt(workoutId));
-    setWorkout(workoutData);
-    setLoading(false);
+    const loadWorkout = window.setTimeout(() => {
+      setWorkout(getWorkoutById(parseInt(workoutId)));
+      setLoading(false);
+    }, 0);
+    return () => window.clearTimeout(loadWorkout);
   }, [workoutId]);
 
   const playSound = useCallback((type: 'beep' | 'complete' | 'rest') => {
@@ -102,31 +106,24 @@ export default function ActiveWorkoutClient({ workoutId }: ActiveWorkoutClientPr
       
       oscillator.start();
       oscillator.stop(audioContext.currentTime + 0.15);
-    } catch (e) {
+    } catch {
       // Audio not available
     }
   }, [soundEnabled]);
 
-  const startWorkout = () => {
-    // Create session in localStorage
-    const session = createSession(parseInt(workoutId));
-    setState(prev => ({ ...prev, sessionId: session.id }));
-
-    // Request wake lock
-    wakeLock.request();
-    
-    setState(prev => ({ ...prev, phase: 'active' }));
-    timer.start();
-    
-    // Initialize block timer if needed
-    initializeBlockTimer();
-  };
-
-  const initializeBlockTimer = useCallback(() => {
+  const initializeBlockTimer = useCallback((progress?: WorkoutProgress | null) => {
     if (!workout) return;
-    
-    const block = workout.blocks[state.currentBlockIndex];
+
+    const blockIndex = progress?.currentBlockIndex ?? state.currentBlockIndex;
+    const exerciseIndex = progress?.currentExerciseIndex ?? state.currentExerciseIndex;
+    const block = workout.blocks[blockIndex];
     if (!block) return;
+
+    if (progress?.blockSeconds && progress.blockSeconds > 0) {
+      blockTimer.reset(progress.blockSeconds);
+      blockTimer.start();
+      return;
+    }
 
     if (block.type === 'emom') {
       // EMOM: 60 second intervals
@@ -138,7 +135,7 @@ export default function ActiveWorkoutClient({ workoutId }: ActiveWorkoutClientPr
       blockTimer.start();
     } else if (block.type === 'warmup' || block.type === 'cooldown') {
       // Timed exercise
-      const exercise = block.exercises[state.currentExerciseIndex];
+      const exercise = block.exercises[exerciseIndex];
       if (exercise?.durationSeconds) {
         blockTimer.reset(exercise.durationSeconds);
         blockTimer.start();
@@ -146,7 +143,47 @@ export default function ActiveWorkoutClient({ workoutId }: ActiveWorkoutClientPr
     }
   }, [workout, state.currentBlockIndex, state.currentExerciseIndex, blockTimer]);
 
-  const handleTimerComplete = useCallback(() => {
+  const startWorkout = () => {
+    const session = getOrCreateActiveSession(parseInt(workoutId));
+    const progress = session.progress;
+
+    setSessionNotes(session.notes || '');
+    setState({
+      phase: progress?.phase || 'active',
+      currentBlockIndex: progress?.currentBlockIndex || 0,
+      currentExerciseIndex: progress?.currentExerciseIndex || 0,
+      currentRound: progress?.currentRound || 1,
+      amrapRounds: progress?.amrapRounds || 0,
+      sessionId: session.id,
+    });
+    wakeLock.request();
+    timer.reset(progress?.elapsedSeconds || 0);
+    timer.start();
+
+    window.setTimeout(() => initializeBlockTimer(progress), 0);
+  };
+
+  const recordCurrentExercise = useCallback(() => {
+    if (!workout || !state.sessionId) return;
+    const block = workout.blocks[state.currentBlockIndex];
+    const exercise = block?.exercises[state.currentExerciseIndex];
+    if (!block || !exercise) return;
+
+    const key = `${state.sessionId}:${block.id}:${exercise.exerciseId}:${state.currentRound}:${state.amrapRounds}`;
+    if (recordedExerciseKeys.current.has(key)) return;
+
+    recordedExerciseKeys.current.add(key);
+    addSessionLog({
+      sessionId: state.sessionId,
+      exerciseId: exercise.exerciseId,
+      blockId: block.id,
+      reps: exercise.reps,
+      weight: null,
+      round: block.type === 'amrap' ? state.amrapRounds + 1 : state.currentRound,
+    });
+  }, [workout, state]);
+
+  function handleTimerComplete() {
     playSound('beep');
     
     if (!workout) return;
@@ -154,6 +191,7 @@ export default function ActiveWorkoutClient({ workoutId }: ActiveWorkoutClientPr
     if (!block) return;
 
     if (block.type === 'emom') {
+      recordCurrentExercise();
       // Move to next exercise in EMOM cycle
       const nextExercise = (state.currentExerciseIndex + 1) % block.exercises.length;
       const nextRound = nextExercise === 0 ? state.currentRound + 1 : state.currentRound;
@@ -178,12 +216,13 @@ export default function ActiveWorkoutClient({ workoutId }: ActiveWorkoutClientPr
       playSound('complete');
       moveToNextBlock();
     } else if (block.type === 'warmup' || block.type === 'cooldown') {
+      recordCurrentExercise();
       // Move to next exercise
       moveToNextExercise();
     }
-  }, [workout, state, blockTimer, playSound]);
+  }
 
-  const moveToNextExercise = useCallback(() => {
+  function moveToNextExercise() {
     if (!workout) return;
     const block = workout.blocks[state.currentBlockIndex];
     if (!block) return;
@@ -223,9 +262,9 @@ export default function ActiveWorkoutClient({ workoutId }: ActiveWorkoutClientPr
         }
       }
     }
-  }, [workout, state, blockTimer]);
+  }
 
-  const moveToNextBlock = useCallback(() => {
+  function moveToNextBlock() {
     if (!workout) return;
     
     const nextBlockIndex = state.currentBlockIndex + 1;
@@ -248,7 +287,7 @@ export default function ActiveWorkoutClient({ workoutId }: ActiveWorkoutClientPr
         initializeBlockTimer();
       }, 100);
     }
-  }, [workout, state.currentBlockIndex, playSound, initializeBlockTimer]);
+  }
 
   const handleRestComplete = useCallback(() => {
     playSound('beep');
@@ -260,7 +299,7 @@ export default function ActiveWorkoutClient({ workoutId }: ActiveWorkoutClientPr
     }));
   }, [playSound]);
 
-  const completeWorkout = () => {
+  function completeWorkout() {
     timer.pause();
     blockTimer.pause();
     wakeLock.release();
@@ -272,15 +311,19 @@ export default function ActiveWorkoutClient({ workoutId }: ActiveWorkoutClientPr
     if (state.sessionId) {
       updateSession(state.sessionId, {
         completedAt: new Date().toISOString(),
-        totalRounds: state.amrapRounds || undefined,
+        totalRounds: state.amrapRounds || null,
+        notes: sessionNotes.trim() || null,
+        progress: null,
       });
     }
-  };
+  }
 
   const handleExerciseComplete = () => {
     if (!workout) return;
     const block = workout.blocks[state.currentBlockIndex];
     
+    recordCurrentExercise();
+
     if (block.type === 'amrap') {
       // In AMRAP, completing all exercises = 1 round
       const nextExercise = (state.currentExerciseIndex + 1) % block.exercises.length;
@@ -308,9 +351,27 @@ export default function ActiveWorkoutClient({ workoutId }: ActiveWorkoutClientPr
   // Effect to handle rest period completion
   useEffect(() => {
     if (state.phase === 'rest' && blockTimer.seconds === 0 && !blockTimer.isRunning) {
-      handleRestComplete();
+      const resumeAfterRest = window.setTimeout(handleRestComplete, 0);
+      return () => window.clearTimeout(resumeAfterRest);
     }
   }, [state.phase, blockTimer.seconds, blockTimer.isRunning, handleRestComplete]);
+
+  // Persist enough state to make refreshes and accidental navigation recoverable.
+  useEffect(() => {
+    if (!state.sessionId || (state.phase !== 'active' && state.phase !== 'rest')) return;
+    updateSession(state.sessionId, {
+      notes: sessionNotes.trim() || null,
+      progress: {
+        phase: state.phase,
+        currentBlockIndex: state.currentBlockIndex,
+        currentExerciseIndex: state.currentExerciseIndex,
+        currentRound: state.currentRound,
+        amrapRounds: state.amrapRounds,
+        elapsedSeconds: timer.seconds,
+        blockSeconds: blockTimer.seconds,
+      },
+    });
+  }, [state, sessionNotes, timer.seconds, blockTimer.seconds]);
 
   if (loading) {
     return (
@@ -551,6 +612,13 @@ export default function ActiveWorkoutClient({ workoutId }: ActiveWorkoutClientPr
 
           {/* Action Buttons */}
           <div className="p-4 space-y-2 border-t border-border">
+            <Textarea
+              value={sessionNotes}
+              onChange={(event) => setSessionNotes(event.target.value)}
+              placeholder="Add a note about this workout (optional)"
+              aria-label="Workout notes"
+              className="min-h-16 resize-none"
+            />
             <Button 
               size="lg" 
               className="w-full h-16 text-lg"
@@ -563,7 +631,15 @@ export default function ActiveWorkoutClient({ workoutId }: ActiveWorkoutClientPr
               <Button 
                 variant="outline" 
                 className="flex-1"
-                onClick={() => timer.isRunning ? timer.pause() : timer.start()}
+                onClick={() => {
+                  if (timer.isRunning) {
+                    timer.pause();
+                    blockTimer.pause();
+                  } else {
+                    timer.start();
+                    if (blockTimer.seconds > 0) blockTimer.start();
+                  }
+                }}
               >
                 {timer.isRunning ? (
                   <><Pause className="h-4 w-4 mr-2" /> Pause</>
