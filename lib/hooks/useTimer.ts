@@ -19,6 +19,8 @@ export function useTimer({
   const [isRunning, setIsRunning] = useState(autoStart);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const onCompleteRef = useRef(onComplete);
+  const endTimeRef = useRef<number | null>(null);
+  const secondsRef = useRef(seconds);
 
   // Keep onComplete ref updated
   useEffect(() => {
@@ -26,20 +28,33 @@ export function useTimer({
   }, [onComplete]);
 
   useEffect(() => {
+    secondsRef.current = seconds;
+  }, [seconds]);
+
+  useEffect(() => {
     if (isRunning) {
+      if (countDown && endTimeRef.current === null) {
+        endTimeRef.current = Date.now() + secondsRef.current * 1000;
+      }
+
       intervalRef.current = setInterval(() => {
-        setSeconds((prev) => {
-          if (countDown) {
-            if (prev <= 1) {
-              setIsRunning(false);
-              onCompleteRef.current?.();
-              return 0;
-            }
-            return prev - 1;
+        if (countDown) {
+          const endTime = endTimeRef.current;
+          if (endTime === null) return;
+
+          const remaining = Math.max(0, Math.ceil((endTime - Date.now()) / 1000));
+          setSeconds(remaining);
+
+          if (remaining === 0) {
+            setIsRunning(false);
+            endTimeRef.current = null;
+            onCompleteRef.current?.();
           }
-          return prev + 1;
-        });
-      }, 1000);
+          return;
+        }
+
+        setSeconds((prev) => prev + 1);
+      }, countDown ? 250 : 1000);
     }
 
     return () => {
@@ -50,8 +65,11 @@ export function useTimer({
   }, [isRunning, countDown]);
 
   const start = useCallback(() => {
+    if (countDown) {
+      endTimeRef.current = Date.now() + seconds * 1000;
+    }
     setIsRunning(true);
-  }, []);
+  }, [countDown, seconds]);
 
   const pause = useCallback(() => {
     setIsRunning(false);
@@ -60,6 +78,7 @@ export function useTimer({
   const reset = useCallback((newSeconds?: number) => {
     setIsRunning(false);
     setSeconds(newSeconds ?? initialSeconds);
+    endTimeRef.current = null;
   }, [initialSeconds]);
 
   const toggle = useCallback(() => {
